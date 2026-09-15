@@ -1,0 +1,490 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Food & Zombies</title>
+    <style>
+        body {
+            overflow: hidden;
+            display: flex;
+            align-items: center;
+            background-color: rgb(30, 28, 28);
+            padding: 20;
+        }
+        canvas {
+            border: 2px solid #104b14;
+            background-color: rgb(122, 114, 114);
+            box-sizing: border-box;
+            width: 100%;
+            height: 100%;
+            touch-action: none;
+        }
+    </style>
+</head>
+<body>
+    
+    <canvas></canvas>
+
+    <script>
+
+
+// Variables
+const canvas = document.querySelector('canvas');
+const ctx = canvas.getContext('2d');
+
+canvas.width = window.innerWidth-25;
+canvas.height = window.innerHeight-25;
+
+const ZombieDict = {
+    "Color": 'rgba(0, 128, 0, 1.0)',
+    "Zombie Circle": {
+        "MinSpeed": 100,
+        "MaxSpeed": 200,
+        "MinSize": 10,
+        "MaxSize": 20,
+    },
+    "Zombie Square": {
+        "MinSpeed": 200,
+        "MaxSpeed": 300,
+        "MinSize": 40,
+        "MaxSize": 60,
+    }
+}
+
+const playerColor = 'rgba(0, 0, 255, 1.0)';
+const playerSpeed = 300
+const playerSize = 20
+const playerHitbox = 20
+
+let keyDict = {"KeyA": false, "KeyW": false, "KeyS": false, "KeyD": false}
+let deltaTime;
+let oldTimeStamp = 0;
+let fps;
+let score = 0;  
+let pointerActive = false;
+let pointerX = 0;
+let pointerY = 0;
+
+//classes
+class ItemEntity {
+    constructor(name="", x=0, y=0, size=20, radius=20, color='rgba(0, 0, 0, 1.0))') {
+        this.name = name;
+        this.x = x;
+        this.y = y;
+        this.size = size;
+        this.hitbox = radius; 
+        this.color = color;
+    }
+    collidesWith(other) {
+        const dx = this.x - other.x;
+        const dy = this.y - other.y;
+        const distance = Math.sqrt(dx * dx + dy * dy);
+        return distance < this.hitbox + other.hitbox;
+    }
+}
+
+class Food extends ItemEntity {
+    constructor(score = 0) {
+        super("Food",0,0,20,20,"yellow")
+        this.score = score;
+        this.eaten = false;
+
+        this.spawn();
+    }
+
+    spawn() {
+        this.x = Math.random() * canvas.width;
+        this.y = Math.random() * canvas.height;
+
+    }
+
+    draw() {
+        ctx.fillStyle = this.color;
+        ctx.strokeStyle = this.color;
+        ctx.lineWidth = 3;
+        ctx.fillRect(this.x - this.size/2, this.y - this.size/2, this.size, this.size)
+    }
+}
+
+class LivingEntity  {
+    constructor(name="", x=0, y=0, size=20, radius=20, speed=200, color='rgba(0, 0, 0, 1.0))') {
+        this.name = name;
+        this.x = x;
+        this.y = y;
+        this.size = size;
+        this.hitbox = radius; 
+        this.speed = speed;
+        this.color = color;
+    }   
+    spawn() {
+        //spawns outside of the screen
+        const spawnSide = Math.floor(Math.random() * 4);
+        const away = 20;
+        switch(spawnSide) {
+            case 0: 
+                this.x = Math.random() * canvas.width;
+                this.y = -this.size * away;
+                break;
+            case 1: 
+                this.x = canvas.width + (this.size * away);
+                this.y = Math.random() * canvas.height;
+                break;
+            case 2: 
+                this.x = Math.random() * canvas.width;
+                this.y = canvas.height + (this.size * away);
+                break;
+            case 3:
+                this.x = -this.size * away;
+                this.y = Math.random() * canvas.height;
+                break;
+        }
+    }
+
+    move(dx, dy) {
+
+        // To prevent diagonal movement speedups e.g. minecraft.
+        const magnitude = Math.hypot(dx,dy)
+        if (magnitude > 0) {
+            dx /= magnitude;
+            dy /= magnitude;
+        }
+        this.x += (dx * this.speed * deltaTime);
+        this.y += (dy * this.speed * deltaTime);
+
+        /* debuging
+        ctx.font = '25px Arial';
+        ctx.fillStyle = 'black';
+        ctx.fillText(`${magnitude}`, 10, 120);
+        ctx.fillText(`${dx*this.speed}, ${dy*this.speed}`, 10, 90);
+        */
+    }
+    collidesWith(other) {
+        const dx = this.x - other.x;
+        const dy = this.y - other.y;
+        const distance = Math.sqrt(dx * dx + dy * dy);
+        return distance < this.hitbox + other.hitbox;
+    }
+
+}
+
+class Player extends LivingEntity  {
+    constructor(x, y, lives=3) {
+        super("Player", x, y, playerSize, playerHitbox, playerSpeed, playerColor);
+        this.lives = lives;
+    }
+    draw() {
+        ctx.beginPath();    
+        ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
+        ctx.fillStyle = this.color;
+        ctx.fill();
+    }
+    handleEvent(event) {
+        switch(event.type) {
+            case 'keydown':
+                if (keyDict.hasOwnProperty(event.code)) {
+                    keyDict[event.code] = true
+                }
+                break
+            case 'keyup':
+                if (keyDict.hasOwnProperty(event.code)) {
+                    keyDict[event.code] = false
+                }
+                break
+        }
+    }
+}
+
+class ZombieCircle extends LivingEntity  {
+    constructor(size=20, radius=20, speed=100, color=ZombieDict["Color"]) {
+        super("zombie", 0, 0, size, radius, speed, color);
+        this.spawn();
+    }
+    moveTowardsPlayer(player) {
+        /* zombie moves horizontally/vertically/diagonally.
+        let dirX = this.x > player.x? -1 : 1;  
+        let dirY = this.y > player.y? -1 : 1;
+
+        this.move(
+            dirX,
+            dirY,
+        )
+        */
+        const dx = player.x - this.x;
+        const dy = player.y - this.y;
+
+        const magnitude = Math.hypot(dx, dy);
+
+        if (magnitude > 0) {
+            this.move(dx / magnitude, dy / magnitude);
+        }
+    }
+
+    draw() {
+        ctx.beginPath();
+        ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
+        ctx.fillStyle = this.color;
+        ctx.fill();
+    }
+}
+
+class ZombieSquare extends LivingEntity  {
+    constructor(size=20, radius=20, speed=100, color=ZombieDict["Color"]) {
+        super("zombie", 0, 0, size, radius, speed, color);
+        this.goingTo = null;
+        this.originalSpeed = speed;
+        
+        this.spawn();
+    }
+    moveTowardsPlayer(player) {
+        // moves to player last location in a straight line
+        const dx = player.x - this.x;
+        const dy = player.y - this.y;
+        if (this.goingTo == null) {
+            this.goingTo = [player.x, player.y]
+            this.speed = this.originalSpeed;
+            return; 
+        }
+
+        const targetX = this.goingTo[0];
+        const targetY = this.goingTo[1];
+        const targetDx = targetX - this.x;
+        const targetDy = targetY - this.y;
+
+        if (Math.abs(targetDx) < 100 && Math.abs(targetDy) < 100) {
+            this.speed = Math.max(this.speed*0.98, this.originalSpeed/4);
+        }
+        if (Math.abs(targetDx) < 2 && Math.abs(targetDy) < 2) {
+            this.goingTo = null; // reached the target
+            return;
+        }
+
+        const magnitude = Math.hypot(targetDx, targetDy);
+        if (magnitude > 0) {
+            this.move(targetDx / magnitude, targetDy / magnitude);
+    
+        }
+    }
+
+    draw() {
+        ctx.fillStyle = this.color;
+        ctx.strokeStyle = this.color;
+        ctx.lineWidth = 3;
+        ctx.fillRect(this.x - this.size/2, this.y - this.size/2, this.size, this.size);
+    }
+}
+
+// more variables
+let Zombies = [];
+let Items = [];
+let player = new Player(canvas.width/2, canvas.height/2);
+
+
+//listeners
+document.addEventListener("keydown", player)
+document.addEventListener("keyup", player) 
+
+document.addEventListener("pointerdown", (e) => {
+    const rect = canvas.getBoundingClientRect();
+    pointerX = e.clientX - rect.left;
+    pointerY = e.clientY - rect.top;
+
+    if (player.lives <= 0) {
+        pointerActive = false;
+        console.log("restarting");
+        score = 0;
+        player.x = canvas.width/2;
+        player.y = canvas.height/2;
+        player.lives = 3;
+        Zombies = [];
+        Items = [];
+        init(); 
+    } 
+    else {
+        pointerActive = true;
+    }
+});
+document.addEventListener("pointermove", (e) => {
+    if (pointerActive) {
+        const rect = canvas.getBoundingClientRect();
+        pointerX = e.clientX - rect.left;
+        pointerY = e.clientY - rect.top;
+    }
+});
+document.addEventListener("pointerup", () => {
+    pointerActive = false;
+});
+document.addEventListener("pointercancel", () => {
+    pointerActive = false;
+});
+
+// old key listener
+/*
+document.addEventListener("keydown", (event) => {
+    if (event.code == "KeyA" || event.code == "KeyW" || event.code == "KeyS" || event.code == "KeyD" ) {
+        keyDict[event.code] = true
+    }
+})
+document.addEventListener("keyup", (event) => {
+    if (event.code == "KeyA" || event.code == "KeyW" || event.code == "KeyS" || event.code == "KeyD" )  {
+        keyDict[event.code] = false
+    }
+}) */
+
+
+// funcs
+function createFood(amount) {
+    for (let i = 0; i < amount; i++) {
+        const score = Math.floor(Math.random() * 10) + 1; // 1-10
+        let food = new Food(score);
+        Items.push(food);
+    }
+}
+
+function createZombie(amount) {
+    for (let i = 0; i < amount; i++) {
+        const zombieType = Math.random() < 0.5 ? "circle" : "square";
+        let zombieSpeed;
+        let zombieSize;
+        if (zombieType == "circle") {
+            zombieSpeed = Math.random() * (ZombieDict["Zombie Circle"]["MaxSpeed"] - ZombieDict["Zombie Circle"]["MinSpeed"]) + ZombieDict["Zombie Circle"]["MinSpeed"];
+            zombieSize = Math.random() * (ZombieDict["Zombie Circle"]["MaxSize"] - ZombieDict["Zombie Circle"]["MinSize"]) + ZombieDict["Zombie Circle"]["MinSize"];
+        } 
+        else if (zombieType == "square") {
+            zombieSpeed = Math.random() * (ZombieDict["Zombie Square"]["MaxSpeed"] - ZombieDict["Zombie Square"]["MinSpeed"]) + ZombieDict["Zombie Square"]["MinSpeed"];
+            zombieSize = Math.random() * (ZombieDict["Zombie Square"]["MaxSize"] - ZombieDict["Zombie Square"]["MinSize"]) + ZombieDict["Zombie Square"]["MinSize"];
+        }
+        const zombieColor = ZombieDict["Color"];
+
+        let newZombie;
+        if (zombieType == "circle") {
+            newZombie = new ZombieCircle(zombieSize, 20, zombieSpeed, zombieColor);
+        } 
+        else if (zombieType == "square") {
+            newZombie = new ZombieSquare(zombieSize, 20, zombieSpeed, zombieColor);
+        }
+        Zombies.push(newZombie);
+    }
+}
+
+function init() {
+    createZombie(2);
+    createFood(5);
+    requestAnimationFrame(gameLoop)
+}
+
+function restart() {
+    Zombies = [];
+    Items = [];
+    createZombie(2);
+    createFood(5);
+}
+
+function updateScreen() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    //Items.forEach(item => item.draw())
+    for (const item of Items) {
+        item.draw();
+    }
+    //Zombies.forEach(zombie => zombie.draw());
+    for (const zombie of Zombies) {
+        zombie.draw();
+    }
+    player.draw();
+}
+
+function text(){
+    ctx.font = '25px Arial';
+    ctx.fillStyle = 'black';
+    ctx.textAlign = "start";
+    ctx.textBaseline = "alphabetic";
+    ctx.fillText("FPS: " + fps, 10, 30);    
+    //ctx.fillText("deltaTime: " + deltaTime, 10, 60);  
+    ctx.fillText("Lives: " + player.lives, 10, 60);
+    ctx.fillText("Score: " + score, 10, 90);   
+}
+
+function gameOver() {
+    ctx.fillStyle = 'black';
+    ctx.fillRect(0, 0, canvas.width, canvas.height)
+
+    ctx.font = '25px Arial';
+    ctx.fillStyle = 'white';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText("Game Over", canvas.width/2, canvas.height/2);
+    ctx.fillText("Final Score: " + score, canvas.width/2, canvas.height/2 + 30);
+    ctx.fillText("Click to restart", canvas.width/2, canvas.height/2 + 60);
+}
+
+function gameLoop(timeStamp) {
+    updateScreen()
+    deltaTime = (timeStamp - oldTimeStamp) / 1000;
+    oldTimeStamp = timeStamp;
+    fps = Math.round(1 / deltaTime);
+    text() // fps text
+    
+
+    if (pointerActive) {
+        const pointDx = pointerX - player.x;
+        const pointDy = pointerY - player.y;
+        const pointMagnitude = Math.hypot(pointDx, pointDy);
+
+        if (pointMagnitude > 0) {
+            player.move(
+                pointDx / pointMagnitude,
+                pointDy / pointMagnitude,
+            );
+        }
+    }
+    else {
+        const horzMovement = Number(keyDict.KeyD) - Number(keyDict.KeyA);
+        const vertMovement = Number(keyDict.KeyS) - Number(keyDict.KeyW);
+        player.move(
+            horzMovement,
+            vertMovement,
+        )
+     }
+    
+
+    for (const item of Items) {
+        if (player.collidesWith(item)) {
+            item.eaten = true;
+            score += item.score; 
+            const idx = Items.indexOf(item);
+            Items.splice(idx, 1);
+        }
+    }
+
+    for (const zombie of Zombies) {
+        zombie.moveTowardsPlayer(player)
+        if (player.collidesWith(zombie)) {
+            console.log("Player touched " + zombie.name);
+            player.lives -= 1;
+            console.log("Player lives: " + player.lives);
+            zombie.color = "red";
+            restart();
+        }
+        else {
+            zombie.color = ZombieDict["Color"];
+        }
+    }
+
+    if (Items.length == 0) {
+        createFood(5);
+        createZombie(1);
+    }
+
+    if (player.lives <= 0) {
+        gameOver();
+    }
+    else {
+        requestAnimationFrame(gameLoop);
+    }
+}
+
+init();
+
+    </script>
+</body>
+</html>
